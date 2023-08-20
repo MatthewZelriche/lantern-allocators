@@ -44,6 +44,10 @@ impl MemorySegmenter {
         let segment_bytes = segment as *mut u8;
         let segment_mut = segment.as_mut().unwrap();
 
+        if segment_mut.in_use() {
+            return Err(());
+        }
+
         if subsegment_size > segment_mut.size() {
             return Err(());
         }
@@ -79,10 +83,63 @@ impl MemorySegmenter {
                 .and_then(|x| x.as_mut())
                 .and_then(|x| Some(x.set_prev(next_free_ptr)));
 
-            Ok(segment)
-        } else {
-            todo!()
+            return Ok(segment);
         }
+
+        // We have to apply an alignment requirement before creating the new segment
+        // The alignment cant be less than SegmentMetadata::SIZE, otherwise, we would trash
+        // previous metadata
+        // We also want all sizes to be a multiple of SegmentMetadata::SIZE, to avoid scenarios a small
+        // segment to small to fit metadata
+        let new_segment_bytes = segment_bytes.add(
+            segment_bytes
+                .align_offset(required_align)
+                .max(SegmentMetadata::SIZE)
+                .next_multiple_of(SegmentMetadata::SIZE),
+        );
+        // After applying the proper alignment, it's possible we end up
+        // with not enough space to satisfy the request
+        if new_segment_bytes.add(subsegment_size) > segment_mut.end_exclusive() {
+            return Err(());
+        }
+
+        let new_segment_metadata_ptr = new_segment_bytes as *mut SegmentMetadata;
+        MemorySegmenter::write_metadata(
+            new_segment_metadata_ptr,
+            SegmentMetadata::new(segment, subsegment_size, true, false),
+        );
+        let new_segment_mut = new_segment_metadata_ptr.as_mut().unwrap();
+
+        // Do we need to construct a new trailing segment?
+        let trailing_segment = if segment_mut.end_exclusive() != new_segment_mut.end_exclusive() {
+            // If not, we have to create a new trailing free segment
+            let new_next_ptr = new_segment_mut.end_exclusive() as *mut SegmentMetadata;
+            let new_next_size = segment_mut.end_exclusive() as usize - new_next_ptr as usize;
+            MemorySegmenter::write_metadata(
+                new_next_ptr,
+                SegmentMetadata::new(new_segment_metadata_ptr, new_next_size, false, false),
+            );
+            let new_next_mut = MemorySegmenter::read_metadata(new_next_ptr);
+            new_next_mut.set_next_exists(segment_mut.next_exists());
+            new_segment_mut.set_next_exists(true);
+
+            new_next_ptr
+        } else {
+            new_segment_mut.set_next_exists(segment_mut.next_exists());
+            new_segment_metadata_ptr
+        };
+
+        // Fix up prev's next if it exists
+        if let Some(next) = segment_mut.next() {
+            let next_mut = next.as_mut().unwrap();
+            next_mut.set_prev(trailing_segment);
+        }
+
+        // Fixup the size of the prev node
+        segment_mut.set_size(new_segment_bytes as usize - segment_mut.addr() as usize);
+        segment_mut.set_next_exists(true);
+
+        Ok(new_segment_metadata_ptr)
     }
 
     pub fn size(&self) -> usize {
