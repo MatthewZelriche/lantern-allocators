@@ -1,10 +1,15 @@
 use bit_field::BitField;
-use core::{mem::size_of, ptr::null_mut};
+use core::{fmt::Debug, marker::PhantomData, mem::size_of, ptr::null_mut};
 
 pub struct MemorySegmenter {
     head: *mut SegmentMetadata,
     start: *mut u8,
     end_exclusive: *mut u8,
+}
+
+pub struct MemorySegmenterIter<'a> {
+    curr_segment: *mut SegmentMetadata,
+    phantom: PhantomData<&'a SegmentMetadata>,
 }
 
 pub struct SegmentMetadata {
@@ -34,12 +39,30 @@ impl MemorySegmenter {
         self.end_exclusive as usize - self.start as usize
     }
 
+    pub fn iter(&self) -> MemorySegmenterIter {
+        MemorySegmenterIter {
+            curr_segment: self.head,
+            phantom: PhantomData,
+        }
+    }
+
     unsafe fn write_metadata(dest: *mut SegmentMetadata, src: SegmentMetadata) {
         core::ptr::write(dest, src);
     }
 
     unsafe fn read_metadata(src: *mut SegmentMetadata) -> &'static SegmentMetadata {
         src.as_mut().unwrap()
+    }
+}
+
+impl<'a> Iterator for MemorySegmenterIter<'a> {
+    type Item = &'a SegmentMetadata;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let item = unsafe { self.curr_segment.as_ref() }?;
+
+        self.curr_segment = item.next().unwrap_or(null_mut());
+        Some(item)
     }
 }
 
