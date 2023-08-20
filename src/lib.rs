@@ -2,6 +2,7 @@
 #![feature(allocator_api)]
 #![feature(int_roundings)]
 
+pub mod allocators;
 pub mod memory_segmenter;
 
 #[cfg(test)]
