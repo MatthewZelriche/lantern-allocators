@@ -145,6 +145,7 @@ impl Debug for SegmentMetadata {
 }
 
 impl SegmentMetadata {
+    const SIZE: usize = size_of::<Self>();
     const IN_USE_BIT: usize = 0;
     const NEXT_EXISTS_BIT: usize = 1;
 
@@ -172,7 +173,7 @@ impl SegmentMetadata {
     }
 
     pub fn size_allocable(&self) -> usize {
-        self.size() - size_of::<Self>()
+        self.size() - Self::SIZE
     }
 
     pub fn alloc_start_ptr(&self) -> *mut u8 {
@@ -241,16 +242,13 @@ mod tests {
         let segment1_ref = unsafe { segment1_ptr.as_mut().unwrap() };
         assert_eq!(segment1_ref.addr(), segment1_ptr);
         assert_eq!(segment1_ref.alloc_start_ptr(), unsafe {
-            (segment1_ptr as *mut u8).add(size_of::<SegmentMetadata>())
+            (segment1_ptr as *mut u8).add(SegmentMetadata::SIZE)
         });
         assert_eq!(segment1_ref.in_use(), true);
         assert_eq!(segment1_ref.next(), None);
         assert_eq!(segment1_ref.prev(), null_mut());
         assert_eq!(segment1_ref.size(), 64);
-        assert_eq!(
-            segment1_ref.size_allocable(),
-            64 - size_of::<SegmentMetadata>()
-        );
+        assert_eq!(segment1_ref.size_allocable(), 64 - SegmentMetadata::SIZE);
         let segment2_ptr = (unsafe { mem.add(64) } as *mut SegmentMetadata);
         unsafe {
             core::ptr::write(
@@ -262,16 +260,13 @@ mod tests {
         let segment2_ref = unsafe { segment1_ref.next().unwrap().as_mut() }.unwrap();
         assert_eq!(segment2_ref.addr(), segment2_ptr);
         assert_eq!(segment2_ref.alloc_start_ptr(), unsafe {
-            (segment2_ptr as *mut u8).add(size_of::<SegmentMetadata>())
+            (segment2_ptr as *mut u8).add(SegmentMetadata::SIZE)
         });
         assert_eq!(segment2_ref.in_use(), false);
         assert_eq!(segment2_ref.next(), None);
         assert_eq!(segment2_ref.prev(), segment1_ptr);
         assert_eq!(segment2_ref.size(), 512);
-        assert_eq!(
-            segment2_ref.size_allocable(),
-            512 - size_of::<SegmentMetadata>()
-        );
+        assert_eq!(segment2_ref.size_allocable(), 512 - SegmentMetadata::SIZE);
 
         let segment3_ptr = (unsafe { mem.add(512 + 64) } as *mut SegmentMetadata);
         unsafe {
@@ -284,15 +279,12 @@ mod tests {
         let segment3_ref = unsafe { segment2_ref.next().unwrap().as_mut() }.unwrap();
         assert_eq!(segment3_ref.addr(), segment3_ptr);
         assert_eq!(segment3_ref.alloc_start_ptr(), unsafe {
-            (segment3_ptr as *mut u8).add(size_of::<SegmentMetadata>())
+            (segment3_ptr as *mut u8).add(SegmentMetadata::SIZE)
         });
         assert_eq!(segment3_ref.in_use(), false);
         assert_eq!(segment3_ref.next(), None);
         assert_eq!(segment3_ref.prev(), segment2_ptr);
         assert_eq!(segment3_ref.size(), 32);
-        assert_eq!(
-            segment3_ref.size_allocable(),
-            32 - size_of::<SegmentMetadata>()
-        );
+        assert_eq!(segment3_ref.size_allocable(), 32 - SegmentMetadata::SIZE);
     }
 }
