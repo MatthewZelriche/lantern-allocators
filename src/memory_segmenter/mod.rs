@@ -55,6 +55,16 @@ impl MemorySegmenter {
     }
 }
 
+impl Debug for MemorySegmenter {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        for segment in self.iter() {
+            write!(f, "{:?}", segment)?;
+        }
+
+        Ok(())
+    }
+}
+
 impl<'a> Iterator for MemorySegmenterIter<'a> {
     type Item = &'a SegmentMetadata;
 
@@ -63,6 +73,24 @@ impl<'a> Iterator for MemorySegmenterIter<'a> {
 
         self.curr_segment = item.next().unwrap_or(null_mut());
         Some(item)
+    }
+}
+
+impl Debug for SegmentMetadata {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(
+            f,
+            "[prev: {:?}, size: {}, used: {}]",
+            self.prev(),
+            self.size(),
+            self.in_use()
+        )?;
+
+        if self.next_exists() {
+            write!(f, " -> ")
+        } else {
+            Ok(())
+        }
     }
 }
 
@@ -133,6 +161,16 @@ mod tests {
     use core::{alloc::Layout, ptr::null_mut};
 
     use super::*;
+
+    #[test]
+    fn segmenter() {
+        const MIB: usize = 1048576;
+        let mem = unsafe { alloc::alloc::alloc(Layout::from_size_align(1024, MIB).unwrap()) };
+
+        let segmenter = unsafe { MemorySegmenter::new(mem, mem.add(1024)) };
+
+        println!("{:?}", segmenter);
+    }
 
     #[test]
     fn segment_metadata() {
