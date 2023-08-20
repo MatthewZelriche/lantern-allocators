@@ -12,6 +12,14 @@ impl SegmentMetadata {
     const IN_USE_BIT: usize = 0;
     const NEXT_EXISTS_BIT: usize = 1;
 
+    pub fn new(prev: *mut SegmentMetadata, size: usize, in_use: bool, next_exists: bool) -> Self {
+        let mut this = SegmentMetadata { prev, size };
+        this.set_in_use(in_use);
+        this.set_next_exists(next_exists);
+
+        this
+    }
+
     pub fn addr(&self) -> *const SegmentMetadata {
         self as *const SegmentMetadata
     }
