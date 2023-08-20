@@ -35,6 +35,56 @@ impl MemorySegmenter {
         this
     }
 
+    pub unsafe fn create_used_segment(
+        &mut self,
+        segment: *mut SegmentMetadata,
+        subsegment_size: usize,
+        required_align: usize,
+    ) -> Result<*mut SegmentMetadata, ()> {
+        let segment_bytes = segment as *mut u8;
+        let segment_mut = segment.as_mut().unwrap();
+
+        if subsegment_size > segment_mut.size() {
+            return Err(());
+        }
+
+        // Can we utilize this segment as is, without having to create a new segment
+        // to represent the used subsegment?
+        if segment_bytes.align_offset(required_align) == 0 {
+            segment_mut.set_in_use(true);
+
+            // Did we use up the entire space of this segment?
+            if segment_mut.size() == subsegment_size {
+                // The easiest possible case - we are already done!
+                return Ok(segment);
+            }
+
+            // We are truncating this segment, and building a new free segment immediately after...
+            let old_size = segment_mut.size();
+            let old_next_exists = segment_mut.next_exists();
+            segment_mut.set_size(subsegment_size);
+            let next_free_ptr = segment_bytes.add(segment_mut.size()) as *mut SegmentMetadata;
+            let next_free_size = old_size - subsegment_size;
+            MemorySegmenter::write_metadata(
+                next_free_ptr,
+                SegmentMetadata::new(segment, next_free_size, false, old_next_exists),
+            );
+            segment_mut.set_next_exists(true);
+
+            // Fixup prevs
+            let next_free_mut = MemorySegmenter::read_metadata(next_free_ptr);
+            next_free_mut.set_prev(segment);
+            next_free_mut
+                .next()
+                .and_then(|x| x.as_mut())
+                .and_then(|x| Some(x.set_prev(next_free_ptr)));
+
+            Ok(segment)
+        } else {
+            todo!()
+        }
+    }
+
     pub fn size(&self) -> usize {
         self.end_exclusive as usize - self.start as usize
     }
@@ -50,7 +100,7 @@ impl MemorySegmenter {
         core::ptr::write(dest, src);
     }
 
-    unsafe fn read_metadata(src: *mut SegmentMetadata) -> &'static SegmentMetadata {
+    unsafe fn read_metadata(src: *mut SegmentMetadata) -> &'static mut SegmentMetadata {
         src.as_mut().unwrap()
     }
 }
@@ -147,6 +197,10 @@ impl SegmentMetadata {
 
     pub fn prev(&self) -> *mut SegmentMetadata {
         self.prev
+    }
+
+    pub fn set_prev(&mut self, prev: *mut SegmentMetadata) {
+        self.prev = prev;
     }
 
     pub fn next(&self) -> Option<*mut SegmentMetadata> {
