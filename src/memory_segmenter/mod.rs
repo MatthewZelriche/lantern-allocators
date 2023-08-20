@@ -317,9 +317,10 @@ mod tests {
         assert_eq!(segment_align_error.is_err(), true);
 
         // Now we can force an allocation, resulting in a zero-sized prev segment
+        // due to alignment restrictions
         let segment_force_zero = unsafe {
             segmenter
-                .create_used_segment(segment.next().unwrap(), 64, 128)
+                .create_used_segment(segment.next().unwrap(), 256, 128)
                 .unwrap()
                 .as_mut()
                 .unwrap()
@@ -328,8 +329,33 @@ mod tests {
             unsafe { segment_force_zero.prev().as_mut().unwrap().size_allocable() },
             0
         );
-        assert_eq!(segment_force_zero.size(), 64);
-        assert_eq!(segment_force_zero.size_allocable(), 48);
+        assert_eq!(segment_force_zero.size(), 256);
+        assert_eq!(
+            segment_force_zero.size_allocable(),
+            256 - SegmentMetadata::SIZE
+        );
+
+        //Perform a middle allocation
+        let middle = unsafe {
+            segmenter
+                .create_used_segment(segment_force_zero.next().unwrap(), 1024, 4096)
+                .unwrap()
+                .as_mut()
+                .unwrap()
+        };
+        assert_eq!(middle.size(), 1024);
+        assert_eq!(middle.addr().align_offset(4096), 0);
+
+        // Another middle allocation, but allocating everything without leaving a trailing segment
+        let middle2 = unsafe {
+            segmenter
+                .create_used_segment(middle.next().unwrap(), MIB, MIB)
+                .unwrap()
+                .as_mut()
+                .unwrap()
+        };
+        assert_eq!(middle2.size(), MIB);
+        assert_eq!(middle2.addr().align_offset(MIB), 0);
     }
 
     #[test]
