@@ -265,6 +265,10 @@ impl SegmentMetadata {
         self.next_exists()
             .then(|| unsafe { (self.addr() as *mut u8).add(self.size()) } as *mut SegmentMetadata)
     }
+
+    pub fn end_exclusive(&self) -> *mut u8 {
+        unsafe { (self.addr() as *mut u8).add(self.size()) }
+    }
 }
 
 #[cfg(test)]
@@ -277,11 +281,55 @@ mod tests {
     #[test]
     fn segmenter() {
         const MIB: usize = 1048576;
-        let mem = unsafe { alloc::alloc::alloc(Layout::from_size_align(1024, MIB).unwrap()) };
+        const SIZE: usize = 2 * MIB;
+        let mem = unsafe { alloc::alloc::alloc(Layout::from_size_align(SIZE, MIB).unwrap()) };
 
-        let segmenter = unsafe { MemorySegmenter::new(mem, mem.add(1024)) };
+        let mut segmenter = unsafe { MemorySegmenter::new(mem, mem.add(SIZE)) };
 
-        println!("{:?}", segmenter);
+        let segment_too_big =
+            unsafe { segmenter.create_used_segment(segmenter.head, SIZE + 64, 16) };
+        assert_eq!(segment_too_big.is_err(), true);
+        assert_eq!(unsafe { segmenter.head.as_mut().unwrap().size() }, SIZE);
+
+        // Insert a small segment at the very beginning
+        // This tests case 1a (same alignment)
+        let segment = unsafe {
+            segmenter
+                .create_used_segment(segmenter.head, 112, 16)
+                .unwrap()
+                .as_mut()
+                .unwrap()
+        };
+        assert_eq!(segment.in_use(), true);
+        assert_eq!(segment.next_exists(), true);
+        assert_eq!(segment.prev(), null_mut());
+        assert_eq!(segment.size(), 112);
+        assert_eq!(segment.addr().align_offset(16), 0);
+
+        // Try (and fail) to create a segment with a segment thats already in use
+        let in_use_error = unsafe { segmenter.create_used_segment(segment, 64, 16) };
+        assert_eq!(in_use_error.is_err(), true);
+
+        // Now segment.next() is not on a 1mib boundary, we can test alignment errors
+        // This allocation succeeds regarding size, but fails after applying alignment
+        let segment_align_error =
+            unsafe { segmenter.create_used_segment(segment.next().unwrap(), MIB + 16, MIB) };
+        assert_eq!(segment_align_error.is_err(), true);
+
+        // Now we can force an allocation, resulting in a zero-sized prev segment
+        let segment_force_zero = unsafe {
+            segmenter
+                .create_used_segment(segment.next().unwrap(), 64, 128)
+                .unwrap()
+                .as_mut()
+                .unwrap()
+        };
+        assert_eq!(
+            unsafe { segment_force_zero.prev().as_mut().unwrap().size_allocable() },
+            0
+        );
+        assert_eq!(segment_force_zero.size(), 64);
+        assert_eq!(segment_force_zero.size_allocable(), 48);
     }
 
     #[test]
