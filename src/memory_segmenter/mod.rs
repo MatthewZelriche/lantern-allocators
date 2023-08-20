@@ -1,11 +1,46 @@
 use bit_field::BitField;
-use core::mem::size_of;
+use core::{mem::size_of, ptr::null_mut};
 
-pub struct MemorySegmenter {}
+pub struct MemorySegmenter {
+    head: *mut SegmentMetadata,
+    start: *mut u8,
+    end_exclusive: *mut u8,
+}
 
 pub struct SegmentMetadata {
     prev: *mut SegmentMetadata,
     size: usize,
+}
+
+impl MemorySegmenter {
+    pub unsafe fn new(start: *mut u8, end_exclusive: *mut u8) -> Self {
+        let head = start as *mut SegmentMetadata;
+
+        let this = MemorySegmenter {
+            head,
+            start,
+            end_exclusive,
+        };
+
+        MemorySegmenter::write_metadata(
+            head,
+            SegmentMetadata::new(null_mut(), this.size(), false, false),
+        );
+
+        this
+    }
+
+    pub fn size(&self) -> usize {
+        self.end_exclusive as usize - self.start as usize
+    }
+
+    unsafe fn write_metadata(dest: *mut SegmentMetadata, src: SegmentMetadata) {
+        core::ptr::write(dest, src);
+    }
+
+    unsafe fn read_metadata(src: *mut SegmentMetadata) -> &'static SegmentMetadata {
+        src.as_mut().unwrap()
+    }
 }
 
 impl SegmentMetadata {
