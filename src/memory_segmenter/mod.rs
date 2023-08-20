@@ -202,7 +202,7 @@ impl Debug for SegmentMetadata {
 }
 
 impl SegmentMetadata {
-    const SIZE: usize = size_of::<Self>();
+    pub const SIZE: usize = size_of::<Self>();
     const IN_USE_BIT: usize = 0;
     const NEXT_EXISTS_BIT: usize = 1;
 

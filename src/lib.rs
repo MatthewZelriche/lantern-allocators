@@ -4,11 +4,3 @@
 
 pub mod allocators;
 pub mod memory_segmenter;
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn it_works() {}
-}
