@@ -152,6 +152,41 @@ impl MemorySegmenter {
         Ok(new_segment_metadata_ptr)
     }
 
+    pub unsafe fn delete_used_segment(
+        &mut self,
+        segment: *mut SegmentMetadata,
+    ) -> Result<*mut SegmentMetadata, ()> {
+        let segment_mut = segment.as_mut().unwrap();
+
+        // Handle the special case that this is the very first segment
+        if segment_mut.prev() == null_mut() {
+            // Does it have a next?
+            if let Some(next) = segment_mut.next() {
+                let next_mut = next.as_mut().unwrap();
+                // Can the next be coalesced?
+                if !next_mut.in_use() {
+                    // Coalesce next_mut into segment_mut
+                    segment_mut.set_next_exists(next_mut.next_exists());
+                    segment_mut.set_size(segment_mut.size() + next_mut.size());
+                    self.num_nodes -= 1;
+
+                    // Fix up the new next, if necessary
+                    segment_mut
+                        .next()
+                        .and_then(|x| Some(x.as_mut().unwrap().set_prev(segment)));
+                } else {
+                    // No coalescing can be done....
+                }
+            } else {
+                // This is the only segment that exists...no coalescing needed
+            }
+            segment_mut.set_in_use(false);
+            Ok(segment)
+        } else {
+            todo!()
+        }
+    }
+
     pub fn overhead(&self) -> usize {
         self.num_nodes * SegmentMetadata::SIZE
     }
