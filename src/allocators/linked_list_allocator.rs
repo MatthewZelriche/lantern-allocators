@@ -34,15 +34,31 @@ impl LinkedListAlloc {
 unsafe impl Allocator for LinkedListAlloc {
     fn allocate(&self, layout: Layout) -> Result<core::ptr::NonNull<[u8]>, AllocError> {
         let real_align = layout.align().max(SegmentMetadata::SIZE);
+        let subsegment_size = layout.size() + SegmentMetadata::SIZE;
+
+        let mut valid_segment_ptr = None;
 
         for entry in self.get_internal().iter() {
             if entry.size_allocable() < layout.size() {
                 continue;
             }
 
+            if self
+                .get_internal()
+                .calculate_alloc_ptr_with_required_align(entry, subsegment_size, real_align)
+                .is_err()
+            {
+                continue;
+            }
+
+            // Found a valid segment to split
+            valid_segment_ptr = Some(entry.addr());
+        }
+
+        if let Some(valid_segment_ptr) = valid_segment_ptr {
             let candidate = unsafe {
                 self.get_mut_internal().create_used_segment(
-                    entry.addr().cast_mut(),
+                    valid_segment_ptr.cast_mut().as_mut().unwrap(),
                     layout.size() + SegmentMetadata::SIZE,
                     real_align,
                 )
@@ -53,11 +69,13 @@ unsafe impl Allocator for LinkedListAlloc {
                 let user_slice =
                     unsafe { from_raw_parts_mut(user_ptr, layout.size()) } as *mut [u8];
 
-                return Ok(NonNull::new(user_slice).unwrap());
+                Ok(NonNull::new(user_slice).unwrap())
+            } else {
+                Err(AllocError)
             }
+        } else {
+            Err(AllocError)
         }
-
-        Err(AllocError)
     }
 
     unsafe fn deallocate(&self, ptr: NonNull<u8>, _: Layout) {
