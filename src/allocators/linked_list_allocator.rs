@@ -33,6 +33,8 @@ impl LinkedListAlloc {
 
 unsafe impl Allocator for LinkedListAlloc {
     fn allocate(&self, layout: Layout) -> Result<core::ptr::NonNull<[u8]>, AllocError> {
+        let real_align = layout.align().max(SegmentMetadata::SIZE);
+
         for entry in self.get_internal().iter() {
             if entry.size_allocable() < layout.size() {
                 continue;
@@ -42,12 +44,12 @@ unsafe impl Allocator for LinkedListAlloc {
                 self.get_mut_internal().create_used_segment(
                     entry.addr().cast_mut(),
                     layout.size() + SegmentMetadata::SIZE,
-                    layout.align(),
+                    real_align,
                 )
             };
 
             if let Ok(new_segment) = candidate {
-                let user_ptr = unsafe { new_segment.add(1) as *mut u8 };
+                let user_ptr = unsafe { new_segment.as_mut() }.unwrap().alloc_start_ptr();
                 let user_slice =
                     unsafe { from_raw_parts_mut(user_ptr, layout.size()) } as *mut [u8];
 
