@@ -68,6 +68,8 @@ unsafe impl Allocator for LinkedListAlloc {
 #[cfg(test)]
 mod tests {
     extern crate alloc;
+    use rand::{thread_rng, Rng};
+
     use super::*;
 
     #[test]
@@ -89,9 +91,47 @@ mod tests {
                     .unwrap()
                     .as_mut()
             };
+            res.fill(0);
             assert_eq!(res.as_ptr().align_offset(16), 0);
             assert_eq!(res.len(), SIZE - SegmentMetadata::SIZE);
-            res.fill(0);
+        }
+
+        {
+            let allocator = unsafe { LinkedListAlloc::new(mem, mem.add(SIZE)) };
+
+            // Allocate randomly until we no longer can:
+            let mut rng = thread_rng();
+            let mut count = 0;
+            loop {
+                let mut random_size: usize = rng.gen_range(8..=1024);
+                random_size = random_size.next_multiple_of(SegmentMetadata::SIZE);
+                let random_alignment: usize = 2usize.pow(rng.gen_range(3..=10));
+
+                let res = unsafe {
+                    allocator
+                        .allocate(Layout::from_size_align(random_size, random_alignment).unwrap())
+                };
+
+                if res.is_err() {
+                    break;
+                }
+
+                let mem = unsafe { res.unwrap().as_mut() };
+                mem.fill(0);
+                assert_eq!(mem.as_ptr().align_offset(random_alignment), 0);
+                assert_eq!(mem.len(), random_size);
+
+                // Metadata should be immediately before the ptr...
+                let metadata = mem.as_mut_ptr() as *mut SegmentMetadata;
+                let metadata = unsafe { metadata.sub(1) };
+                let metadata_mut = unsafe { metadata.as_mut().unwrap() };
+                assert_eq!(metadata_mut.size_allocable(), random_size);
+
+                count += 1;
+            }
+
+            // If we didnt allocate at least this many times, something very likely went wrong...
+            assert!(count > 1000);
         }
     }
 }
