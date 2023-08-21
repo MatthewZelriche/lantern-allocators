@@ -9,4 +9,6 @@ edition = "2021"
 bit_field = "0.10.2"
 rand = "0.8.5"
 lock_api = "0.4.6"
-parking_lot = { version = "0.12", features = ["nightly"] }
+
+[dev-dependencies]
+parking_lot = { version = "0.12" }
