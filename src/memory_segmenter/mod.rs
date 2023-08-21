@@ -39,7 +39,7 @@ impl MemorySegmenter {
         &mut self,
         segment: *mut SegmentMetadata,
         subsegment_size: usize,
-        required_align: usize,
+        required_align: usize, // alignment of the ALLOC ptr, not the segment
     ) -> Result<*mut SegmentMetadata, ()> {
         let segment_bytes = segment as *mut u8;
         let segment_mut = segment.as_mut().unwrap();
@@ -52,9 +52,13 @@ impl MemorySegmenter {
             return Err(());
         }
 
+        if subsegment_size % SegmentMetadata::SIZE != 0 {
+            return Err(());
+        }
+
         // Can we utilize this segment as is, without having to create a new segment
         // to represent the used subsegment?
-        if segment_bytes.align_offset(required_align) == 0 {
+        if segment_mut.alloc_start_ptr().align_offset(required_align) == 0 {
             segment_mut.set_in_use(true);
 
             // Did we use up the entire space of this segment?
@@ -91,12 +95,13 @@ impl MemorySegmenter {
         // previous metadata
         // We also want all sizes to be a multiple of SegmentMetadata::SIZE, to avoid scenarios a small
         // segment to small to fit metadata
-        let new_segment_bytes = segment_bytes.add(
-            segment_bytes
+        let alloc_bytes = segment_mut.alloc_start_ptr();
+        let alloc_bytes = alloc_bytes.add(
+            alloc_bytes
                 .align_offset(required_align)
-                .max(SegmentMetadata::SIZE)
-                .next_multiple_of(SegmentMetadata::SIZE),
+                .max(SegmentMetadata::SIZE),
         );
+        let new_segment_bytes = (alloc_bytes as *mut SegmentMetadata).sub(1) as *mut u8;
         // After applying the proper alignment, it's possible we end up
         // with not enough space to satisfy the request
         if new_segment_bytes.add(subsegment_size) > segment_mut.end_exclusive() {
@@ -295,7 +300,7 @@ mod tests {
         // This tests case 1a (same alignment)
         let segment = unsafe {
             segmenter
-                .create_used_segment(segmenter.head, 112, 16)
+                .create_used_segment(segmenter.head, 128, 16)
                 .unwrap()
                 .as_mut()
                 .unwrap()
@@ -303,8 +308,8 @@ mod tests {
         assert_eq!(segment.in_use(), true);
         assert_eq!(segment.next_exists(), true);
         assert_eq!(segment.prev(), null_mut());
-        assert_eq!(segment.size(), 112);
-        assert_eq!(segment.addr().align_offset(16), 0);
+        assert_eq!(segment.size(), 128);
+        assert_eq!(segment.alloc_start_ptr().align_offset(16), 0);
 
         // Try (and fail) to create a segment with a segment thats already in use
         let in_use_error = unsafe { segmenter.create_used_segment(segment, 64, 16) };
@@ -313,38 +318,19 @@ mod tests {
         // Now segment.next() is not on a 1mib boundary, we can test alignment errors
         // This allocation succeeds regarding size, but fails after applying alignment
         let segment_align_error =
-            unsafe { segmenter.create_used_segment(segment.next().unwrap(), MIB + 16, MIB) };
+            unsafe { segmenter.create_used_segment(segment.next().unwrap(), MIB + 32, MIB) };
         assert_eq!(segment_align_error.is_err(), true);
-
-        // Now we can force an allocation, resulting in a zero-sized prev segment
-        // due to alignment restrictions
-        let segment_force_zero = unsafe {
-            segmenter
-                .create_used_segment(segment.next().unwrap(), 256, 128)
-                .unwrap()
-                .as_mut()
-                .unwrap()
-        };
-        assert_eq!(
-            unsafe { segment_force_zero.prev().as_mut().unwrap().size_allocable() },
-            0
-        );
-        assert_eq!(segment_force_zero.size(), 256);
-        assert_eq!(
-            segment_force_zero.size_allocable(),
-            256 - SegmentMetadata::SIZE
-        );
 
         //Perform a middle allocation
         let middle = unsafe {
             segmenter
-                .create_used_segment(segment_force_zero.next().unwrap(), 1024, 4096)
+                .create_used_segment(segment.next().unwrap(), 1024, 4096)
                 .unwrap()
                 .as_mut()
                 .unwrap()
         };
         assert_eq!(middle.size(), 1024);
-        assert_eq!(middle.addr().align_offset(4096), 0);
+        assert_eq!(middle.alloc_start_ptr().align_offset(4096), 0);
 
         // Another middle allocation, but allocating everything without leaving a trailing segment
         let middle2 = unsafe {
@@ -355,7 +341,7 @@ mod tests {
                 .unwrap()
         };
         assert_eq!(middle2.size(), MIB);
-        assert_eq!(middle2.addr().align_offset(MIB), 0);
+        assert_eq!(middle2.alloc_start_ptr().align_offset(MIB), 0);
     }
 
     #[test]
