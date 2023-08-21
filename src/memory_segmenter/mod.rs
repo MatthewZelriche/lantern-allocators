@@ -158,6 +158,10 @@ impl MemorySegmenter {
     ) -> Result<*mut SegmentMetadata, ()> {
         let segment_mut = segment.as_mut().unwrap();
 
+        if !segment_mut.in_use() {
+            return Err(());
+        }
+
         // Handle the special case that this is the very first segment
         if segment_mut.prev() == null_mut() {
             // Does it have a next?
