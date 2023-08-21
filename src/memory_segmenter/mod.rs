@@ -458,6 +458,33 @@ mod tests {
         assert_eq!(middle2.size(), MIB + 16);
         assert_eq!(middle2.alloc_start_ptr().align_offset(MIB), 0);
         assert_eq!(segmenter.overhead(), SegmentMetadata::SIZE * 5);
+
+        // Test deletion
+        let mut next = segmenter.head;
+        loop {
+            if next == null_mut() {
+                break;
+            }
+            unsafe {
+                let _ = segmenter.delete_used_segment(next);
+            }
+
+            next = unsafe { next.as_mut() }
+                .unwrap()
+                .next()
+                .unwrap_or(null_mut());
+        }
+        assert_eq!(segmenter.num_nodes, 1);
+        assert_eq!(segmenter.overhead(), SegmentMetadata::SIZE);
+        let head_mut = unsafe { segmenter.head.as_mut().unwrap() };
+        assert_eq!(head_mut.in_use(), false);
+        assert_eq!(head_mut.size(), SIZE);
+        assert_eq!(head_mut.next_exists(), false);
+        assert_eq!(head_mut.prev(), null_mut());
+
+        // Try to delete a free segment
+        let res = unsafe { segmenter.delete_used_segment(segmenter.head) };
+        assert_eq!(res.is_err(), true);
     }
 
     #[test]
