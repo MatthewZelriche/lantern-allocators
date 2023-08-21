@@ -37,30 +37,65 @@ impl MemorySegmenter {
         this
     }
 
+    pub fn calculate_alloc_ptr_with_required_align(
+        &self,
+        segment: &SegmentMetadata,
+        subsegment_size: usize,
+        required_align: usize,
+    ) -> Result<*mut u8, ()> {
+        if segment.alloc_start_ptr().align_offset(required_align) == 0 {
+            Ok(segment.alloc_start_ptr())
+        } else {
+            // We have to apply an alignment requirement before creating the new segment
+            // The alignment cant be less than SegmentMetadata::SIZE, otherwise, we would trash
+            // previous metadata
+            // We also want all sizes to be a multiple of SegmentMetadata::SIZE, to avoid scenarios a small
+            // segment to small to fit metadata
+            let alloc_bytes = segment.alloc_start_ptr();
+            let alloc_bytes = unsafe {
+                alloc_bytes.add(
+                    alloc_bytes
+                        .align_offset(required_align)
+                        .max(SegmentMetadata::SIZE),
+                )
+            };
+            let new_segment_bytes =
+                unsafe { (alloc_bytes as *mut SegmentMetadata).sub(1) } as *mut u8;
+            // After applying the proper alignment, it's possible we end up
+            // with not enough space to satisfy the request
+            if unsafe { new_segment_bytes.add(subsegment_size) } > segment.end_exclusive() {
+                return Err(());
+            } else {
+                Ok(alloc_bytes)
+            }
+        }
+    }
+
     pub unsafe fn create_used_segment(
         &mut self,
         segment: *mut SegmentMetadata,
         subsegment_size: usize,
         required_align: usize, // alignment of the ALLOC ptr, not the segment
     ) -> Result<*mut SegmentMetadata, ()> {
+        let required_alloc_ptr = self.calculate_alloc_ptr_with_required_align(
+            segment.as_ref().unwrap(),
+            subsegment_size,
+            required_align,
+        )?;
+
         let segment_bytes = segment as *mut u8;
         let segment_mut = segment.as_mut().unwrap();
 
-        if segment_mut.in_use() {
-            return Err(());
-        }
-
-        if subsegment_size > segment_mut.size() {
-            return Err(());
-        }
-
-        if subsegment_size % SegmentMetadata::SIZE != 0 {
+        if segment_mut.in_use()
+            || subsegment_size > segment_mut.size()
+            || subsegment_size % SegmentMetadata::SIZE != 0
+        {
             return Err(());
         }
 
         // Can we utilize this segment as is, without having to create a new segment
         // to represent the used subsegment?
-        if segment_mut.alloc_start_ptr().align_offset(required_align) == 0 {
+        if required_alloc_ptr == segment_mut.alloc_start_ptr() {
             segment_mut.set_in_use(true);
 
             // Did we use up the entire space of this segment?
@@ -93,23 +128,7 @@ impl MemorySegmenter {
             return Ok(segment);
         }
 
-        // We have to apply an alignment requirement before creating the new segment
-        // The alignment cant be less than SegmentMetadata::SIZE, otherwise, we would trash
-        // previous metadata
-        // We also want all sizes to be a multiple of SegmentMetadata::SIZE, to avoid scenarios a small
-        // segment to small to fit metadata
-        let alloc_bytes = segment_mut.alloc_start_ptr();
-        let alloc_bytes = alloc_bytes.add(
-            alloc_bytes
-                .align_offset(required_align)
-                .max(SegmentMetadata::SIZE),
-        );
-        let new_segment_bytes = (alloc_bytes as *mut SegmentMetadata).sub(1) as *mut u8;
-        // After applying the proper alignment, it's possible we end up
-        // with not enough space to satisfy the request
-        if new_segment_bytes.add(subsegment_size) > segment_mut.end_exclusive() {
-            return Err(());
-        }
+        let new_segment_bytes = required_alloc_ptr.sub(SegmentMetadata::SIZE);
 
         let new_segment_metadata_ptr = new_segment_bytes as *mut SegmentMetadata;
         MemorySegmenter::write_metadata(
