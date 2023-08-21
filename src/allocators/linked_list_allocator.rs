@@ -60,8 +60,12 @@ unsafe impl Allocator for LinkedListAlloc {
         Err(AllocError)
     }
 
-    unsafe fn deallocate(&self, _ptr: NonNull<u8>, _: Layout) {
-        todo!()
+    unsafe fn deallocate(&self, ptr: NonNull<u8>, _: Layout) {
+        // Get segment start
+        let segment_start_ptr = (ptr.as_ptr() as *mut SegmentMetadata).sub(1);
+        self.get_mut_internal()
+            .delete_used_segment(segment_start_ptr)
+            .expect("Failed to free data!");
     }
 }
 
@@ -99,9 +103,10 @@ mod tests {
         {
             let allocator = unsafe { LinkedListAlloc::new(mem, mem.add(SIZE)) };
 
+            let mut allocs = Vec::new();
+
             // Allocate randomly until we no longer can:
             let mut rng = thread_rng();
-            let mut count = 0;
             loop {
                 let mut random_size: usize = rng.gen_range(8..=1024);
                 random_size = random_size.next_multiple_of(SegmentMetadata::SIZE);
@@ -120,18 +125,44 @@ mod tests {
                 mem.fill(0);
                 assert_eq!(mem.as_ptr().align_offset(random_alignment), 0);
                 assert_eq!(mem.len(), random_size);
+                allocs.push(mem.as_ptr());
 
                 // Metadata should be immediately before the ptr...
                 let metadata = mem.as_mut_ptr() as *mut SegmentMetadata;
                 let metadata = unsafe { metadata.sub(1) };
                 let metadata_mut = unsafe { metadata.as_mut().unwrap() };
                 assert_eq!(metadata_mut.size_allocable(), random_size);
-
-                count += 1;
             }
 
             // If we didnt allocate at least this many times, something very likely went wrong...
-            assert!(count > 1000);
+            assert!(allocs.len() > 1000);
+
+            // Deallocate in a random order
+            while allocs.len() > 0 {
+                let idx = rng.gen_range(0..allocs.len());
+                let ptr = allocs.swap_remove(idx);
+
+                unsafe {
+                    allocator.deallocate(
+                        NonNull::new(ptr.cast_mut()).unwrap(),
+                        Layout::from_size_align(8, 8).unwrap(),
+                    );
+                }
+            }
+            assert_eq!(allocator.get_internal().overhead(), SegmentMetadata::SIZE);
+
+            // Try to allocate entire memory to ensure we successfully deallocated everything
+            let mem = unsafe {
+                allocator
+                    .allocate(Layout::from_size_align(SIZE - SegmentMetadata::SIZE, 16).unwrap())
+                    .unwrap()
+                    .as_ptr()
+                    .as_mut()
+                    .unwrap()
+            };
+            mem.fill(0);
+            assert_eq!(mem.as_ptr().align_offset(16), 0);
+            assert_eq!(mem.len(), SIZE - SegmentMetadata::SIZE);
         }
     }
 }
