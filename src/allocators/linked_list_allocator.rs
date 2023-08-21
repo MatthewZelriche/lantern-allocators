@@ -1,6 +1,5 @@
 use core::{
     alloc::{AllocError, Allocator, Layout},
-    cell::UnsafeCell,
     ptr::NonNull,
     slice::from_raw_parts_mut,
 };
@@ -11,40 +10,33 @@ struct LinkedListAllocImpl {
     segmenter_list: MemorySegmenter,
 }
 
-pub struct LinkedListAlloc(UnsafeCell<LinkedListAllocImpl>);
+pub struct LinkedListAlloc<R: lock_api::RawMutex>(lock_api::Mutex<R, LinkedListAllocImpl>);
 
-impl LinkedListAlloc {
+impl<R: lock_api::RawMutex> LinkedListAlloc<R> {
     pub unsafe fn new(start: *mut u8, end: *mut u8) -> Self {
         let internal = LinkedListAllocImpl {
             segmenter_list: unsafe { MemorySegmenter::new(start, end) },
         };
 
-        LinkedListAlloc(UnsafeCell::new(internal))
-    }
-
-    fn get_mut_internal(&self) -> &mut MemorySegmenter {
-        &mut unsafe { self.0.get().as_mut() }.unwrap().segmenter_list
-    }
-
-    fn get_internal(&self) -> &MemorySegmenter {
-        unsafe { &self.0.get().as_ref().unwrap().segmenter_list }
+        LinkedListAlloc(lock_api::Mutex::new(internal))
     }
 }
 
-unsafe impl Allocator for LinkedListAlloc {
+unsafe impl<R: lock_api::RawMutex> Allocator for LinkedListAlloc<R> {
     fn allocate(&self, layout: Layout) -> Result<core::ptr::NonNull<[u8]>, AllocError> {
+        let mut internal = self.0.lock();
+
         let real_align = layout.align().max(SegmentMetadata::SIZE);
         let subsegment_size = layout.size() + SegmentMetadata::SIZE;
-
         let mut valid_segment_ptr = None;
 
-        for entry in self.get_internal().iter() {
+        for entry in internal.segmenter_list.iter() {
             if entry.size_allocable() < layout.size() {
                 continue;
             }
 
-            if self
-                .get_internal()
+            if internal
+                .segmenter_list
                 .calculate_alloc_ptr_with_required_align(entry, subsegment_size, real_align)
                 .is_err()
             {
@@ -57,7 +49,7 @@ unsafe impl Allocator for LinkedListAlloc {
 
         if let Some(valid_segment_ptr) = valid_segment_ptr {
             let candidate = unsafe {
-                self.get_mut_internal().create_used_segment(
+                internal.segmenter_list.create_used_segment(
                     valid_segment_ptr.cast_mut().as_mut().unwrap(),
                     layout.size() + SegmentMetadata::SIZE,
                     real_align,
@@ -79,9 +71,12 @@ unsafe impl Allocator for LinkedListAlloc {
     }
 
     unsafe fn deallocate(&self, ptr: NonNull<u8>, _: Layout) {
+        let mut internal = self.0.lock();
+
         // Get segment start
         let segment_start_ptr = (ptr.as_ptr() as *mut SegmentMetadata).sub(1);
-        self.get_mut_internal()
+        internal
+            .segmenter_list
             .delete_used_segment(segment_start_ptr)
             .expect("Failed to free data!");
     }
@@ -101,7 +96,8 @@ mod tests {
         let mem = unsafe { alloc::alloc::alloc(Layout::from_size_align(SIZE, 16).unwrap()) };
 
         {
-            let allocator = unsafe { LinkedListAlloc::new(mem, mem.add(SIZE)) };
+            let allocator: LinkedListAlloc<parking_lot::RawMutex> =
+                unsafe { LinkedListAlloc::new(mem, mem.add(SIZE)) };
             // Attempt to allocate larger than we can hold
             let res = allocator.allocate(Layout::from_size_align(SIZE, 16).unwrap());
             assert_eq!(res.is_err(), true);
@@ -119,7 +115,8 @@ mod tests {
         }
 
         {
-            let allocator = unsafe { LinkedListAlloc::new(mem, mem.add(SIZE)) };
+            let allocator: LinkedListAlloc<parking_lot::RawMutex> =
+                unsafe { LinkedListAlloc::new(mem, mem.add(SIZE)) };
 
             let mut allocs = Vec::new();
 
@@ -167,7 +164,10 @@ mod tests {
                     );
                 }
             }
-            assert_eq!(allocator.get_internal().overhead(), SegmentMetadata::SIZE);
+            assert_eq!(
+                allocator.0.lock().segmenter_list.overhead(),
+                SegmentMetadata::SIZE
+            );
 
             // Try to allocate entire memory to ensure we successfully deallocated everything
             let mem = unsafe {
