@@ -186,8 +186,71 @@ impl MemorySegmenter {
             }
             segment_mut.set_in_use(false);
             Ok(segment)
-        } else {
-            todo!()
+        }
+        // Handle the special case that this is the very last segment
+        else if !segment_mut.next_exists() {
+            let prev_mut = segment_mut.prev().as_mut().unwrap();
+            // Can prev be coalesced?
+            if !prev_mut.in_use() {
+                // Coalesce prev into segment
+                prev_mut.set_next_exists(segment_mut.next_exists());
+                prev_mut.set_size(prev_mut.size() + segment_mut.size());
+                self.num_nodes -= 1;
+
+                // Fixup new next, if necessary
+                prev_mut
+                    .next()
+                    .and_then(|x| Some(x.as_mut().unwrap().set_prev(prev_mut)));
+            }
+
+            prev_mut.set_in_use(false);
+            Ok(prev_mut.addr().cast_mut())
+        }
+        // The general case...this is a middle node
+        else {
+            let prev_mut = segment_mut.prev().as_mut().unwrap();
+            let next_mut = segment_mut.next().unwrap().as_mut().unwrap();
+
+            if !prev_mut.in_use() && !next_mut.in_use() {
+                // Coalesce prev with curr and next
+                prev_mut.set_next_exists(next_mut.next_exists());
+                prev_mut.set_size(prev_mut.size() + segment_mut.size() + next_mut.size());
+                self.num_nodes -= 2;
+
+                // Fixup new next, if necessary
+                prev_mut
+                    .next()
+                    .and_then(|x| Some(x.as_mut().unwrap().set_prev(prev_mut)));
+
+                Ok(prev_mut.addr().cast_mut())
+            } else if !prev_mut.in_use() {
+                // coalesce curr with just prev
+                prev_mut.set_next_exists(true);
+                prev_mut.set_size(prev_mut.size() + segment_mut.size());
+                self.num_nodes -= 1;
+
+                // Fixup new next
+                next_mut.set_prev(prev_mut.addr().cast_mut());
+
+                Ok(prev_mut.addr().cast_mut())
+            } else if !next_mut.in_use() {
+                // coalesce curr with just next
+                segment_mut.set_next_exists(next_mut.next_exists());
+                segment_mut.set_size(segment_mut.size() + next_mut.size());
+                self.num_nodes -= 1;
+
+                // Fixup new next, if necessary
+                segment_mut
+                    .next()
+                    .and_then(|x| Some(x.as_mut().unwrap().set_prev(segment_mut)));
+
+                segment_mut.set_in_use(false);
+                Ok(segment)
+            } else {
+                // No coalescing can be done at all...
+                segment_mut.set_in_use(false);
+                Ok(segment)
+            }
         }
     }
 
