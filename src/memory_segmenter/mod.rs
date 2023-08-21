@@ -5,6 +5,7 @@ pub struct MemorySegmenter {
     head: *mut SegmentMetadata,
     start: *mut u8,
     end_exclusive: *mut u8,
+    num_nodes: usize,
 }
 
 pub struct MemorySegmenterIter<'a> {
@@ -25,6 +26,7 @@ impl MemorySegmenter {
             head,
             start,
             end_exclusive,
+            num_nodes: 1,
         };
 
         MemorySegmenter::write_metadata(
@@ -87,6 +89,7 @@ impl MemorySegmenter {
                 .and_then(|x| x.as_mut())
                 .and_then(|x| Some(x.set_prev(next_free_ptr)));
 
+            self.num_nodes += 1;
             return Ok(segment);
         }
 
@@ -113,6 +116,7 @@ impl MemorySegmenter {
             new_segment_metadata_ptr,
             SegmentMetadata::new(segment, subsegment_size, true, false),
         );
+        self.num_nodes += 1;
         let new_segment_mut = new_segment_metadata_ptr.as_mut().unwrap();
 
         // Do we need to construct a new trailing segment?
@@ -128,6 +132,7 @@ impl MemorySegmenter {
             new_next_mut.set_next_exists(segment_mut.next_exists());
             new_segment_mut.set_next_exists(true);
 
+            self.num_nodes += 1;
             new_next_ptr
         } else {
             new_segment_mut.set_next_exists(segment_mut.next_exists());
@@ -145,6 +150,10 @@ impl MemorySegmenter {
         segment_mut.set_next_exists(true);
 
         Ok(new_segment_metadata_ptr)
+    }
+
+    pub fn overhead(&self) -> usize {
+        self.num_nodes * SegmentMetadata::SIZE
     }
 
     pub fn size(&self) -> usize {
@@ -290,6 +299,8 @@ mod tests {
         let mem = unsafe { alloc::alloc::alloc(Layout::from_size_align(SIZE, MIB).unwrap()) };
 
         let mut segmenter = unsafe { MemorySegmenter::new(mem, mem.add(SIZE)) };
+        assert_eq!(segmenter.num_nodes, 1);
+        assert_eq!(segmenter.overhead(), SegmentMetadata::SIZE);
 
         let segment_too_big =
             unsafe { segmenter.create_used_segment(segmenter.head, SIZE + 64, 16) };
@@ -310,6 +321,7 @@ mod tests {
         assert_eq!(segment.prev(), null_mut());
         assert_eq!(segment.size(), 128);
         assert_eq!(segment.alloc_start_ptr().align_offset(16), 0);
+        assert_eq!(segmenter.overhead(), SegmentMetadata::SIZE * 2);
 
         // Try (and fail) to create a segment with a segment thats already in use
         let in_use_error = unsafe { segmenter.create_used_segment(segment, 64, 16) };
@@ -321,7 +333,7 @@ mod tests {
             unsafe { segmenter.create_used_segment(segment.next().unwrap(), MIB + 32, MIB) };
         assert_eq!(segment_align_error.is_err(), true);
 
-        //Perform a middle allocation
+        // Perform a middle allocation
         let middle = unsafe {
             segmenter
                 .create_used_segment(segment.next().unwrap(), 1024, 4096)
@@ -331,17 +343,19 @@ mod tests {
         };
         assert_eq!(middle.size(), 1024);
         assert_eq!(middle.alloc_start_ptr().align_offset(4096), 0);
+        assert_eq!(segmenter.overhead(), SegmentMetadata::SIZE * 4);
 
         // Another middle allocation, but allocating everything without leaving a trailing segment
         let middle2 = unsafe {
             segmenter
-                .create_used_segment(middle.next().unwrap(), MIB, MIB)
+                .create_used_segment(middle.next().unwrap(), MIB + 16, MIB)
                 .unwrap()
                 .as_mut()
                 .unwrap()
         };
-        assert_eq!(middle2.size(), MIB);
+        assert_eq!(middle2.size(), MIB + 16);
         assert_eq!(middle2.alloc_start_ptr().align_offset(MIB), 0);
+        assert_eq!(segmenter.overhead(), SegmentMetadata::SIZE * 5);
     }
 
     #[test]
