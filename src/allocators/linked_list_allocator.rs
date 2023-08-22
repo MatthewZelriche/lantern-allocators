@@ -12,6 +12,8 @@ struct LinkedListAllocImpl {
 
 pub struct LinkedListAlloc<R: lock_api::RawMutex>(lock_api::Mutex<R, LinkedListAllocImpl>);
 
+unsafe impl<R: lock_api::RawMutex> Send for LinkedListAlloc<R> {}
+
 impl<R: lock_api::RawMutex> LinkedListAlloc<R> {
     pub unsafe fn new(start: *mut u8, end: *mut u8) -> Self {
         let internal = LinkedListAllocImpl {
