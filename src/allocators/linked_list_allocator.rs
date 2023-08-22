@@ -31,11 +31,13 @@ unsafe impl<R: lock_api::RawMutex> Allocator for LinkedListAlloc<R> {
         let mut internal = self.0.lock();
 
         let real_align = layout.align().max(SegmentMetadata::SIZE);
-        let subsegment_size = layout.size() + SegmentMetadata::SIZE;
+        // Round size request to nearest SIZE byte boundary
+        let real_layout_size = layout.size().next_multiple_of(SegmentMetadata::SIZE);
+        let subsegment_size = real_layout_size + SegmentMetadata::SIZE;
         let mut valid_segment_ptr = None;
 
         for entry in internal.segmenter_list.iter() {
-            if entry.size_allocable() < layout.size() {
+            if entry.size_allocable() < real_layout_size {
                 continue;
             }
 
@@ -55,7 +57,7 @@ unsafe impl<R: lock_api::RawMutex> Allocator for LinkedListAlloc<R> {
             let candidate = unsafe {
                 internal.segmenter_list.create_used_segment(
                     valid_segment_ptr.cast_mut().as_mut().unwrap(),
-                    layout.size() + SegmentMetadata::SIZE,
+                    subsegment_size,
                     real_align,
                 )
             };
@@ -63,7 +65,7 @@ unsafe impl<R: lock_api::RawMutex> Allocator for LinkedListAlloc<R> {
             if let Ok(new_segment) = candidate {
                 let user_ptr = unsafe { new_segment.as_mut() }.unwrap().alloc_start_ptr();
                 let user_slice =
-                    unsafe { from_raw_parts_mut(user_ptr, layout.size()) } as *mut [u8];
+                    unsafe { from_raw_parts_mut(user_ptr, real_layout_size) } as *mut [u8];
 
                 Ok(NonNull::new(user_slice).unwrap())
             } else {
@@ -185,6 +187,27 @@ mod tests {
             mem.fill(0);
             assert_eq!(mem.as_ptr().align_offset(16), 0);
             assert_eq!(mem.len(), SIZE - SegmentMetadata::SIZE);
+
+            unsafe {
+                allocator.deallocate(
+                    NonNull::new(mem.as_ptr().cast_mut()).unwrap(),
+                    Layout::from_size_align(8, 8).unwrap(),
+                );
+            }
+
+            // Test a weird, nonstandard small size and alignment
+            let mem = unsafe {
+                {
+                    allocator
+                        .allocate(Layout::from_size_align(1, 2).unwrap())
+                        .unwrap()
+                        .as_ptr()
+                        .as_mut()
+                        .unwrap()
+                }
+            };
+            assert_eq!(mem.len(), SegmentMetadata::SIZE);
+            assert_eq!(mem.as_ptr().align_offset(SegmentMetadata::SIZE), 0);
         }
     }
 }
