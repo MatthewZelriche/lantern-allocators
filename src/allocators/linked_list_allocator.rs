@@ -6,10 +6,12 @@ use core::{
 
 use crate::memory_segmenter::{MemorySegmenter, SegmentMetadata};
 
+#[derive(Debug)]
 struct LinkedListAllocImpl {
     segmenter_list: MemorySegmenter,
 }
 
+#[derive(Debug)]
 pub struct LinkedListAlloc<R: lock_api::RawMutex>(lock_api::Mutex<R, LinkedListAllocImpl>);
 
 unsafe impl<R: lock_api::RawMutex> Send for LinkedListAlloc<R> {}
