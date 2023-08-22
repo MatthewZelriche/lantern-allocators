@@ -91,6 +91,8 @@ unsafe impl<R: lock_api::RawMutex> Allocator for LinkedListAlloc<R> {
 #[cfg(test)]
 mod tests {
     extern crate alloc;
+    use core::mem::size_of;
+
     use rand::{thread_rng, Rng};
 
     use super::*;
@@ -208,6 +210,44 @@ mod tests {
             };
             assert_eq!(mem.len(), SegmentMetadata::SIZE);
             assert_eq!(mem.as_ptr().align_offset(SegmentMetadata::SIZE), 0);
+        }
+    }
+
+    #[test]
+    fn ll_allocator_vec() {
+        const MIB: usize = 1048576;
+        const SIZE: usize = 2 * MIB;
+        let mem = unsafe { alloc::alloc::alloc(Layout::from_size_align(SIZE, 16).unwrap()) };
+
+        let allocator: LinkedListAlloc<parking_lot::RawMutex> =
+            unsafe { LinkedListAlloc::new(mem, mem.add(SIZE)) };
+
+        let mut vec = Vec::new_in(allocator);
+        let mut rng = thread_rng();
+        let mut total = 0;
+        for _ in 0..1000 {
+            let val: i32 = rng.gen_range(-100000..100000);
+            total += val;
+            vec.push(val);
+        }
+        assert_eq!(vec.len(), 1000);
+        assert_eq!(vec.iter().sum::<i32>(), total);
+    }
+
+    #[test]
+    fn ll_allocator_exceed_max() {
+        const MIB: usize = 1048576;
+        const SIZE: usize = MIB;
+        let mem = unsafe { alloc::alloc::alloc(Layout::from_size_align(SIZE, 16).unwrap()) };
+
+        let allocator: LinkedListAlloc<parking_lot::RawMutex> =
+            unsafe { LinkedListAlloc::new(mem, mem.add(SIZE)) };
+
+        let lower_bound = SIZE / size_of::<u64>();
+
+        for i in 0..(lower_bound * 3) {
+            let boxed_val = Box::new_in(i, &allocator);
+            assert_eq!(*boxed_val, i);
         }
     }
 }
